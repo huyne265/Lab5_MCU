@@ -23,6 +23,8 @@
 /* Private includes ----------------------------------------------------------*/
 /* USER CODE BEGIN Includes */
 #include <software_timer.h>
+#include <string.h>
+#include <stdio.h>
 /* USER CODE END Includes */
 
 /* Private typedef -----------------------------------------------------------*/
@@ -63,6 +65,7 @@ static void MX_TIM2_Init(void);
 /* Private user code ---------------------------------------------------------*/
 /* USER CODE BEGIN 0 */
 #define MAX_BUFFER_SIZE 30
+#define MAX_HISTORY_STATE 30
 
 #define CMD_NONE 0
 #define CMD_RST 1
@@ -84,6 +87,9 @@ uint8_t buffer[MAX_BUFFER_SIZE];
 uint8_t index_buffer = 0;
 uint8_t buffer_flag = 0;
 
+uint8_t prev[MAX_HISTORY_STATE];
+uint8_t history_count = 0;
+
 uint8_t cmd_flag = 0;
 uint8_t cmd_data = 0;
 
@@ -102,39 +108,51 @@ void HAL_UART_RxCpltCallback( UART_HandleTypeDef * huart){
 }
 
 void command_parser_fsm(){
+    if(buffer[index_buffer - 1] == '\b'){
+    	history_count--;
+        state = prev[history_count - 1];
+        if(index_buffer > 0) index_buffer--;
+        return;
+    }
+
         switch(state){
             case CMD_INIT:
-                if(buffer[index_buffer - 1] == '!') {
-                    state = FIRST_CHAR;
-                }
+                if(buffer[index_buffer - 1] == '!') state = FIRST_CHAR;
+                prev[history_count++] = state;
                 break;
 
             case FIRST_CHAR:
                 if(buffer[index_buffer - 1] == 'R') state = S_CHAR;
                 else if(buffer[index_buffer - 1] == 'O') state = K_CHAR;
                 else state = CMD_INIT;
+                prev[history_count++] = state;
                 break;
 
             case S_CHAR:
                 if(buffer[index_buffer - 1] == 'S') state = T_CHAR;
                 else state = CMD_INIT;
+                prev[history_count++] = state;
                 break;
 
             case T_CHAR:
                 if(buffer[index_buffer - 1] == 'T') state = END_RST;
                 else state = CMD_INIT;
+                prev[history_count++] = state;
                 break;
 
             case K_CHAR:
                 if(buffer[index_buffer - 1] == 'K') state = END_OK;
                 else state = CMD_INIT;
+                prev[history_count++] = state;
                 break;
 
             case END_RST:
                 if(buffer[index_buffer - 1] == '#'){
                 	cmd_flag = 1;
                     cmd_data = CMD_RST;
+                    history_count = 0;
                 }
+                prev[history_count++] = state;
                 state = CMD_INIT;
                 break;
 
@@ -142,7 +160,9 @@ void command_parser_fsm(){
                 if(buffer[index_buffer - 1] == '#'){
                 	cmd_flag = 1;
                     cmd_data = CMD_OK;
+                    history_count = 0;
                 }
+                prev[history_count++] = state;
                 state = CMD_INIT;
                 break;
             default:
@@ -156,7 +176,7 @@ void uart_communication_fsm(){
         case UART_INIT:
             if(cmd_flag == 1 && cmd_data == CMD_RST){
                 ADC_value = HAL_ADC_GetValue(&hadc1);
-                sprintf(str, "\r\n!ADC=%lu#", ADC_value);
+                sprintf(str, "\r\n!ADC=%lu#\r\n", ADC_value);
                 HAL_UART_Transmit(&huart2, (uint8_t*)str, strlen(str), 1000);
                 setTimer(0, 3000);
                 HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
@@ -173,7 +193,7 @@ void uart_communication_fsm(){
                 HAL_UART_Transmit(&huart2, (uint8_t*)str, strlen(str), 1000);
                 HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
             }else if(isTimerExpired(0)){
-                sprintf(str, "\r\n!ADC=%lu#", ADC_value);
+                sprintf(str, "!ADC=%lu#\r\n", ADC_value);
                 HAL_UART_Transmit(&huart2, (uint8_t*)str, strlen(str), 1000);
                 setTimer(0, 3000);
                 HAL_GPIO_TogglePin(LED_GPIO_Port, LED_Pin);
